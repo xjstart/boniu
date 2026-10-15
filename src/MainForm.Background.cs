@@ -19,6 +19,8 @@ namespace MiniView.WebView2App
         private readonly RoundedButton nextVideoButton = CreateSettingsActionButton("下一条", false);
         private readonly RoundedButton restoreVideoButton = CreateSettingsActionButton("恢复画面", false);
         private readonly RoundedButton backgroundMuteButton = CreateSettingsActionButton("静音", false);
+        private readonly RoundedButton backgroundPlayButton = CreateSettingsActionButton("暂停播放", false);
+        private readonly RoundedButton backgroundRepeatButton = CreateSettingsActionButton("循环当前：关", false);
         private readonly ToolStripMenuItem backgroundMenuItem = new ToolStripMenuItem("后台播放（隐藏画面）");
         private readonly ToggleSwitch backgroundModeToggle = new ToggleSwitch();
         private readonly Label backgroundModeStatus = CreateStatusLabel();
@@ -37,6 +39,10 @@ namespace MiniView.WebView2App
         private Size beforeBackgroundMinimumSize;
         private Rectangle backgroundViewport;
         private string lastAutomaticToken;
+        private bool backgroundRepeatCurrent;
+        private bool backgroundHasVideo;
+        private bool backgroundPaused;
+        private bool backgroundPlaybackPending;
 
         private void BuildBackgroundPanel()
         {
@@ -70,12 +76,21 @@ namespace MiniView.WebView2App
             };
             backgroundPanel.Controls.Add(backgroundVolumeLabel);
             backgroundPanel.Controls.Add(backgroundVolumeSlider);
-            foreach (RoundedButton button in new[] { previousVideoButton, nextVideoButton, backgroundMuteButton, restoreVideoButton })
+            foreach (RoundedButton button in new[] { previousVideoButton, nextVideoButton, backgroundMuteButton, restoreVideoButton, backgroundPlayButton, backgroundRepeatButton })
                 backgroundPanel.Controls.Add(button);
             previousVideoButton.Click += delegate { RequestVideoSwitch(-1); };
             nextVideoButton.Click += delegate { RequestVideoSwitch(1); };
             backgroundMuteButton.Click += delegate { ToggleMute(); };
             restoreVideoButton.Click += delegate { ToggleBackgroundMode(); };
+            backgroundPlayButton.Click += delegate { ObserveTask(ToggleBackgroundPlaybackAsync(), "BackgroundPlayback"); };
+            backgroundRepeatButton.Click += delegate
+            {
+                if (!backgroundMode || currentIsLive) return;
+                backgroundRepeatCurrent = !backgroundRepeatCurrent;
+                lastAutomaticToken = null;
+                ApplyBackgroundState();
+                UpdateBackgroundControls();
+            };
         }
 
         private void ToggleBackgroundMode()
@@ -93,9 +108,10 @@ namespace MiniView.WebView2App
                 beforeBackgroundMinimumSize = MinimumSize;
                 backgroundViewport = webView.Bounds;
                 backgroundMode = true;
+                backgroundRepeatCurrent = false;
                 webView.Visible = false;
                 webView.Dock = DockStyle.None;
-                webView.Bounds = backgroundViewport;
+                ParkBackgroundWebView();
                 settingsOpen = false;
                 settingsPanel.Visible = false;
                 suspendTimer.Stop();
@@ -105,6 +121,7 @@ namespace MiniView.WebView2App
             else
             {
                 if (!settingsOpen) settings.BackgroundBounds = BoundsData.FromRectangle(Bounds);
+                webView.Visible = false;
                 backgroundMode = false;
                 backgroundPanel.Visible = false;
                 MinimumSize = beforeBackgroundMinimumSize;
@@ -144,15 +161,16 @@ namespace MiniView.WebView2App
             }
             else
             {
-                MinimumSize = new Size(Scaled(280), Scaled(200));
+                MinimumSize = new Size(Scaled(280), Scaled(240));
                 SetBoundsProgrammatically(WindowRules.KeepOnScreen(settings.BackgroundBounds,
-                    Scaled(280), Scaled(200), new Size(Scaled(360), Scaled(200))));
+                    Scaled(280), Scaled(240), new Size(Scaled(360), Scaled(240))));
             }
             LayoutWindow();
         }
 
         private void LayoutBackgroundPanel()
         {
+            if (backgroundMode) ParkBackgroundWebView();
             backgroundPanel.Bounds = contentHost.ClientRectangle;
             backgroundPanel.Visible = backgroundMode && !settingsOpen;
             int margin = Scaled(10), gap = Scaled(8);
@@ -162,10 +180,23 @@ namespace MiniView.WebView2App
             nextVideoButton.SetBounds(margin + width + gap, Scaled(32), width, Scaled(30));
             backgroundMuteButton.SetBounds(margin, Scaled(70), width, Scaled(30));
             restoreVideoButton.SetBounds(margin + width + gap, Scaled(70), width, Scaled(30));
-            backgroundVolumeLabel.SetBounds(margin, Scaled(108), Scaled(82), Scaled(30));
-            backgroundVolumeSlider.SetBounds(margin + Scaled(82), Scaled(108),
+            backgroundPlayButton.SetBounds(margin, Scaled(108), width, Scaled(30));
+            backgroundRepeatButton.SetBounds(margin + width + gap, Scaled(108), width, Scaled(30));
+            backgroundVolumeLabel.SetBounds(margin, Scaled(146), Scaled(82), Scaled(30));
+            backgroundVolumeSlider.SetBounds(margin + Scaled(82), Scaled(146),
                 Math.Max(1, backgroundPanel.Width - margin * 2 - Scaled(82)), Scaled(30));
             if (backgroundPanel.Visible) backgroundPanel.BringToFront();
+        }
+
+        private void ParkBackgroundWebView()
+        {
+            // Likes/favorites finish slide transitions on animation frames. IsVisible=false freezes
+            // those callbacks and leaves the carousel locked after its first background switch.
+            // Keep its original viewport active outside the host's client area; no picture is exposed.
+            int width = Math.Max(1, backgroundViewport.Width), height = Math.Max(1, backgroundViewport.Height);
+            webView.Dock = DockStyle.None;
+            webView.Bounds = new Rectangle(-width - Scaled(8), 0, width, height);
+            webView.Visible = Visible;
         }
 
         private void UpdateBackgroundControls()
@@ -178,9 +209,15 @@ namespace MiniView.WebView2App
             backgroundPlaybackStatus.Text = !string.IsNullOrEmpty(transientNotice) ? transientNotice
                 : videoSwitchPending ? "正在切换视频…"
                 : standaloneLive ? "独立直播间 · 恢复画面可返回推荐流"
-                : currentIsLive ? "直播声音播放中 · 可手动切换" : "后台播放 · 播完自动下一条";
+                : backgroundHasVideo && backgroundPaused ? "已暂停播放"
+                : currentIsLive ? "直播声音播放中 · 可手动切换"
+                : backgroundRepeatCurrent ? "后台播放 · 循环当前视频" : "后台播放 · 播完自动下一条";
             toolTip.SetToolTip(backgroundPlaybackStatus, backgroundPlaybackStatus.Text);
             backgroundMuteButton.Text = settings.Muted ? "恢复声音" : "静音";
+            backgroundPlayButton.Text = backgroundPaused ? "继续播放" : "暂停播放";
+            backgroundPlayButton.Enabled = backgroundMode && Visible && backgroundHasVideo && !backgroundPlaybackPending && !videoSwitchPending;
+            backgroundRepeatButton.Text = backgroundRepeatCurrent ? "循环当前：开" : "循环当前：关";
+            backgroundRepeatButton.Enabled = backgroundMode && Visible && backgroundHasVideo && !currentIsLive && !videoSwitchPending;
             backgroundVolumeLabel.Text = "音量 " + settings.BackgroundVolume + "%";
             toolTip.SetToolTip(backgroundVolumeSlider, settings.Muted ? "当前已静音，点击恢复声音后生效" : "后台音量 " + settings.BackgroundVolume + "%");
             toolTip.SetToolTip(previousVideoButton, "上一条" + FormatShortcut(previousVideoHotkey));
@@ -215,7 +252,49 @@ namespace MiniView.WebView2App
             long revision = ++backgroundRevision;
             if (!webViewReady || webView.CoreWebView2 == null || webViewSuspended || isQuitting) return;
             await webView.ExecuteScriptAsync(BackgroundScripts.Build(revision, navigationGeneration,
-                backgroundMode, backgroundMode && Visible, currentIsLive, settings.BackgroundVolume));
+                backgroundMode, backgroundMode && Visible, currentIsLive, settings.BackgroundVolume, backgroundRepeatCurrent));
+            if (revision == backgroundRevision) await RefreshBackgroundPlaybackAsync();
+        }
+
+        private void ReadBackgroundPlayback(BackgroundPlaybackState state)
+        {
+            if (state == null) return;
+            backgroundHasVideo = state.HasVideo;
+            backgroundPaused = state.Paused;
+            UpdateBackgroundControls();
+        }
+
+        private async Task RefreshBackgroundPlaybackAsync()
+        {
+            if (!backgroundMode || !Visible || !webViewReady || webViewSuspended || isQuitting) return;
+            long revision = backgroundRevision;
+            int navigation = navigationGeneration;
+            var state = new JavaScriptSerializer().Deserialize<BackgroundPlaybackState>(await webView.ExecuteScriptAsync(BackgroundScripts.PlaybackState));
+            if (backgroundMode && revision == backgroundRevision && navigation == navigationGeneration && Visible) ReadBackgroundPlayback(state);
+        }
+
+        private async Task ToggleBackgroundPlaybackAsync()
+        {
+            if (!backgroundMode || !Visible || !webViewReady || webViewSuspended || backgroundPlaybackPending || videoSwitchPending) return;
+            long revision = backgroundRevision, operation = lifecycle.Generation;
+            int navigation = navigationGeneration;
+            backgroundPlaybackPending = true;
+            UpdateBackgroundControls();
+            try
+            {
+                string result = new JavaScriptSerializer().Deserialize<string>(await webView.ExecuteScriptAsync(BackgroundScripts.TogglePlayback));
+                if (!CanSwitchVideo(revision, navigation, operation)) return;
+                if (result == "blocked") ShowTransientNotice("当前视频不可操作，请恢复画面检查。");
+                await RefreshBackgroundPlaybackAsync();
+            }
+            finally { backgroundPlaybackPending = false; if (!IsDisposed) UpdateBackgroundControls(); }
+        }
+
+        private sealed class BackgroundPlaybackState
+        {
+            public bool Live { get; set; }
+            public bool HasVideo { get; set; }
+            public bool Paused { get; set; }
         }
 
         private async Task ApplyBackgroundVolumeAsync()
@@ -272,6 +351,7 @@ namespace MiniView.WebView2App
                 else if (action != "native")
                 {
                     ShowTransientNotice(action == "live-room" ? "独立直播间，请恢复画面返回推荐流。"
+                        : action == "boundary" ? (direction < 0 ? "已经是列表第一条。" : "已经是列表最后一条。")
                         : action == "blocked" ? "请恢复画面处理弹窗后再切换。" : "此页不支持切换，请返回推荐流。");
                     return;
                 }
@@ -308,12 +388,18 @@ namespace MiniView.WebView2App
 
         private bool HandleBackgroundMessage(string message)
         {
+            if (message.StartsWith("boniu:background-play-failed:", StringComparison.Ordinal))
+            {
+                string expected = "boniu:background-play-failed:" + navigationGeneration + ":" + backgroundRevision;
+                if (backgroundMode && Visible && message == expected) ShowTransientNotice("播放未能恢复，请恢复画面检查。");
+                return true;
+            }
             if (!message.StartsWith("boniu:background-ended:", StringComparison.Ordinal)) return false;
             string[] parts = message.Split(':');
             int navigation; long revision; long token;
             if (parts.Length != 5 || !int.TryParse(parts[2], out navigation)
                 || !long.TryParse(parts[3], out revision) || !long.TryParse(parts[4], out token)) return true;
-            if (!backgroundMode || !Visible || currentIsLive || navigation != navigationGeneration || revision != backgroundRevision) return true;
+            if (!backgroundMode || !Visible || currentIsLive || backgroundRepeatCurrent || navigation != navigationGeneration || revision != backgroundRevision) return true;
             string key = navigation.ToString(CultureInfo.InvariantCulture) + ":" + parts[4];
             if (lastAutomaticToken == key) return true;
             lastAutomaticToken = key;

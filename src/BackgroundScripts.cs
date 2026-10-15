@@ -4,7 +4,7 @@ namespace MiniView.WebView2App
 {
     internal static class BackgroundScripts
     {
-        internal static string Build(long revision, int navigation, bool enabled, bool allowed, bool live, int volume)
+        internal static string Build(long revision, int navigation, bool enabled, bool allowed, bool live, int volume, bool repeatCurrent)
         {
             return @"(() => {
                 const revision = " + revision.ToString(CultureInfo.InvariantCulture) + @";
@@ -15,7 +15,7 @@ namespace MiniView.WebView2App
                     s = window.__boniuBackground = {
                         revision: -1, enabled: false, allowed: false, live: false,
                         loops: new Map(), ids: new WeakMap(), serial: 0, token: '', signature: '',
-                        current: null, endedToken: '', timer: 0, observer: null, volume: 1
+                        current: null, endedToken: '', timer: 0, observer: null, volume: 1, repeat: false
                     };
                     s.rendered = el => {
                         if (!el) return false;
@@ -25,6 +25,8 @@ namespace MiniView.WebView2App
                     };
                     s.blocked = () => Array.from(document.querySelectorAll(
                         '[role=dialog], [data-e2e=login-modal], [class*=""login-modal""], .douyin_login_new_class')).some(s.rendered);
+                    s.scope = () => Array.from(document.querySelectorAll('.modal-video-container'))
+                        .reverse().find(el => el.getClientRects().length && getComputedStyle(el).display !== 'none') || document;
                     // Live cards use different markers from short videos; both belong to the same feed.
                     s.feedFor = video => video && video.closest('#slidelist, [data-e2e=""slideList""], '
                         + '[data-e2e=""feed-active-video""], [data-e2e=""feed-item""], [data-e2e=""feed-video""], [data-e2e=""feed-live""]');
@@ -38,15 +40,16 @@ namespace MiniView.WebView2App
                         // Navigation belongs to the slide, independently of its media renderer.
                         // Hidden WebViews stop compositing: geometry can remain on the OLD slide
                         // even after Douyin has selected and started the NEXT item. Prefer its marker.
-                        const active = document.querySelector('[data-e2e=""feed-active-video""], [data-e2e=""feed-active-live""]');
+                        const scope = s.scope();
+                        const active = scope.querySelector('[data-e2e=""feed-active-video""], [data-e2e=""feed-active-live""]');
                         if (active && active.getClientRects().length && getComputedStyle(active).display !== 'none')
                             return active.closest('[data-e2e=""feed-item""]') || active;
-                        const playing = Array.from(document.querySelectorAll('[data-e2e=""feed-item""] video'))
+                        const playing = Array.from(scope.querySelectorAll('[data-e2e=""feed-item""] video'))
                             .find(v => !v.paused && !v.ended);
                         if (playing) return playing.closest('[data-e2e=""feed-item""]');
                         for (const selector of ['[data-e2e=""feed-item""]',
                             '[data-e2e=""feed-active-video""], [data-e2e=""feed-video""], [data-e2e=""feed-live""]']) {
-                            const items = Array.from(document.querySelectorAll(selector)).filter(s.rendered);
+                            const items = Array.from(scope.querySelectorAll(selector)).filter(s.rendered);
                             if (items.length) return items.sort((a,b) => s.area(b)-s.area(a))[0];
                         }
                         return null;
@@ -68,7 +71,7 @@ namespace MiniView.WebView2App
                             const videos = item.matches('video') ? [item] : Array.from(item.querySelectorAll('video'));
                             return videos.find(s.rendered) || videos.find(v => !v.paused) || videos[0] || null;
                         }
-                        const videos = Array.from(document.querySelectorAll('video')).filter(s.rendered);
+                        const videos = Array.from(s.scope().querySelectorAll('video')).filter(s.rendered);
                         return videos.sort((a,b) => s.area(b)-s.area(a))[0] || null;
                     };
                     s.applyVolume = () => {
@@ -101,23 +104,43 @@ namespace MiniView.WebView2App
                         s.applyVolume();
                         if (video && s.enabled && !s.isLive()) {
                             if (!s.loops.has(video)) s.loops.set(video, video.loop);
-                            if (video.loop) video.loop = false;
+                            if (video.loop !== s.repeat) video.loop = s.repeat;
                         }
                         return s.token;
                     };
                     s.canSwitch = () => s.enabled && s.allowed && !s.blocked() && Boolean(s.update());
                     s.ended = event => {
-                        if (!s.canSwitch() || s.isLive() || event.target !== s.current || s.endedToken === s.token) return;
+                        if (!s.canSwitch() || s.isLive() || s.repeat || event.target !== s.current || s.endedToken === s.token) return;
                         const token = s.token, stamp = s.revision, nav = s.navigation;
                         s.endedToken = token;
                         clearTimeout(s.timer);
                         s.timer = setTimeout(() => {
-                            if (s.revision !== stamp || !s.canSwitch() || s.isLive() || s.token !== token) return;
+                            if (s.revision !== stamp || !s.canSwitch() || s.isLive() || s.repeat || s.token !== token) return;
                             try { chrome.webview.postMessage('boniu:background-ended:' + nav + ':' + stamp + ':' + token); } catch (_) {}
                         }, 250);
                     };
                     s.loaded = event => {
                         if (event.target === s.current) s.update();
+                    };
+                    s.playbackState = () => {
+                        s.update();
+                        return {Live:s.isLive(), HasVideo:Boolean(s.current), Paused:!s.current || s.current.paused};
+                    };
+                    s.togglePlayback = () => {
+                        s.update();
+                        if (!s.enabled || !s.allowed || s.blocked() || !s.current) return 'blocked';
+                        const video = s.current, token = s.token;
+                        clearTimeout(s.timer);
+                        if (!video.paused) { video.pause(); return 'paused'; }
+                        s.endedToken = '';
+                        Promise.resolve(video.play()).then(() => {
+                            if ((s.enabled && !s.allowed) || (window.__boniuMediaState && !window.__boniuMediaState.visible)
+                                || s.update() !== token) video.pause();
+                        }).catch(() => {
+                            if (s.enabled && s.allowed && s.update() === token)
+                                chrome.webview.postMessage('boniu:background-play-failed:' + s.navigation + ':' + s.revision);
+                        });
+                        return 'playing';
                     };
                     s.prepareKeyboard = () => {
                         if (!s.canSwitch()) return 'blocked';
@@ -158,8 +181,17 @@ namespace MiniView.WebView2App
                             : '[data-e2e=""video-switch-next-arrow""], .xgplayer-playswitch-next';
                         const labels = direction < 0 ? ['上一条', '上一个视频'] : ['下一条', '下一个视频'];
                         const selectors = [nativeSelector, ...labels.map(label => '[aria-label=""' + label + '""], [title=""' + label + '""]')];
+                        const card = s.activeItem();
                         for (const selector of selectors) {
-                            const controls = document.querySelectorAll(selector);
+                            // Liked/favorite modals mount controls in every preloaded player.
+                            // Never invoke a callback owned by a previous/next card.
+                            const controls = Array.from(s.scope().querySelectorAll(selector))
+                                .filter(control => {
+                                    const owner = control.closest('[data-e2e=""feed-item""], [data-e2e=""feed-active-video""], [data-e2e=""feed-video""], [data-e2e=""feed-live""]');
+                                    return !owner || (card && card.contains(control));
+                                }).sort((a,b) => Number(Boolean(card && card.contains(b))) - Number(Boolean(card && card.contains(a))));
+                            if (controls.length && controls.every(control => control.disabled || control.classList.contains('disabled') || control.getAttribute('aria-disabled') === 'true'))
+                                return 'boundary';
                             for (const control of controls) {
                                 if (control.disabled || control.classList.contains('disabled') || control.getAttribute('aria-disabled') === 'true') continue;
                                 control.click(); return 'native';
@@ -173,6 +205,7 @@ namespace MiniView.WebView2App
                 s.allowed = " + (allowed ? "true" : "false") + @";
                 s.live = " + (live ? "true" : "false") + @";
                 s.volume = " + (volume / 100.0).ToString(CultureInfo.InvariantCulture) + @";
+                s.repeat = " + (repeatCurrent ? "true" : "false") + @";
                 clearTimeout(s.timer);
                 if (enabled && !s.enabled) {
                     s.enabled = true;
@@ -196,6 +229,9 @@ namespace MiniView.WebView2App
         }
 
         internal const string Token = "window.__boniuBackground ? window.__boniuBackground.update() : ''";
+        internal const string TogglePlayback = "window.__boniuBackground ? window.__boniuBackground.togglePlayback() : 'blocked'";
+        internal static readonly string PlaybackState = "window.__boniuBackground && window.__boniuBackground.enabled ? window.__boniuBackground.playbackState() : ({Live:"
+            + PageScripts.LiveStateScript + ",HasVideo:false,Paused:true})";
         internal static readonly string LiveState = "window.__boniuBackground && window.__boniuBackground.enabled ? window.__boniuBackground.isLive() : " + PageScripts.LiveStateScript;
         internal static string Volume(long revision, int volume)
         {

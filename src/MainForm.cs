@@ -530,7 +530,8 @@ namespace MiniView.WebView2App
             if (settings.ChromeHidden && !backgroundMode) return;
             if (captureTarget != null) CancelShortcutCapture();
             settingsOpen = !settingsOpen;
-            webView.Visible = !settingsOpen && !backgroundMode;
+            if (backgroundMode) ParkBackgroundWebView();
+            else webView.Visible = !settingsOpen;
             settingsPanel.Visible = settingsOpen;
             if (settingsOpen) settingsPanel.BringToFront();
             else if (backgroundMode) backgroundPanel.BringToFront();

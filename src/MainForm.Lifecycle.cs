@@ -154,7 +154,8 @@ namespace MiniView.WebView2App
             showGraceUntil = DateTime.UtcNow.AddMilliseconds(ShowGraceMilliseconds);
             outsideSince = null;
             Show();
-            webView.Visible = !settingsOpen && !backgroundMode;
+            if (backgroundMode) ParkBackgroundWebView();
+            else webView.Visible = !settingsOpen;
             webView.SynchronizeVisibility();
             Activate();
             pointerTimer.Interval = 10;

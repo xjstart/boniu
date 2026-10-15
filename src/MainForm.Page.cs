@@ -47,8 +47,14 @@ namespace MiniView.WebView2App
             bool hasLivePlayer = false;
             try
             {
-                string result = await webView.ExecuteScriptAsync(backgroundMode ? BackgroundScripts.LiveState : PageScripts.LiveProbeScript);
-                hasLivePlayer = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
+                string result = await webView.ExecuteScriptAsync(backgroundMode ? BackgroundScripts.PlaybackState : PageScripts.LiveProbeScript);
+                if (backgroundMode)
+                {
+                    var state = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<BackgroundPlaybackState>(result);
+                    hasLivePlayer = state != null && state.Live;
+                    if (navigation == navigationGeneration && lifecycle.IsCurrent(operation) && Visible) ReadBackgroundPlayback(state);
+                }
+                else hasLivePlayer = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception exception)
             {
