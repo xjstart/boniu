@@ -13,6 +13,8 @@ namespace MiniView.WebView2App
         private const int HotkeyNextVideo = 7;
         private readonly Panel backgroundPanel = new Panel();
         private readonly Label backgroundPlaybackStatus = new Label();
+        private readonly TrackBar backgroundVolumeSlider = new TrackBar();
+        private readonly Label backgroundVolumeLabel = new Label();
         private readonly RoundedButton previousVideoButton = CreateSettingsActionButton("上一条", false);
         private readonly RoundedButton nextVideoButton = CreateSettingsActionButton("下一条", false);
         private readonly RoundedButton restoreVideoButton = CreateSettingsActionButton("恢复画面", false);
@@ -47,6 +49,27 @@ namespace MiniView.WebView2App
             backgroundPlaybackStatus.TextAlign = ContentAlignment.MiddleCenter;
             backgroundPlaybackStatus.MouseDown += DragWindow;
             backgroundPanel.Controls.Add(backgroundPlaybackStatus);
+            backgroundVolumeLabel.Font = UiFonts.Micro;
+            backgroundVolumeLabel.ForeColor = UiPalette.TextSecondary;
+            backgroundVolumeLabel.TextAlign = ContentAlignment.MiddleLeft;
+            backgroundVolumeSlider.Minimum = 0;
+            backgroundVolumeSlider.Maximum = 100;
+            backgroundVolumeSlider.SmallChange = 5;
+            backgroundVolumeSlider.LargeChange = 10;
+            backgroundVolumeSlider.TickStyle = TickStyle.None;
+            backgroundVolumeSlider.AutoSize = false;
+            backgroundVolumeSlider.BackColor = UiPalette.Page;
+            backgroundVolumeSlider.AccessibleName = "后台音量";
+            backgroundVolumeSlider.Value = settings.BackgroundVolume;
+            backgroundVolumeSlider.ValueChanged += delegate
+            {
+                settings.BackgroundVolume = backgroundVolumeSlider.Value;
+                UpdateBackgroundControls();
+                ScheduleSettingsSave();
+                ObserveTask(ApplyBackgroundVolumeAsync(), "BackgroundVolume");
+            };
+            backgroundPanel.Controls.Add(backgroundVolumeLabel);
+            backgroundPanel.Controls.Add(backgroundVolumeSlider);
             foreach (RoundedButton button in new[] { previousVideoButton, nextVideoButton, backgroundMuteButton, restoreVideoButton })
                 backgroundPanel.Controls.Add(button);
             previousVideoButton.Click += delegate { RequestVideoSwitch(-1); };
@@ -121,9 +144,9 @@ namespace MiniView.WebView2App
             }
             else
             {
-                MinimumSize = new Size(Scaled(280), Scaled(160));
+                MinimumSize = new Size(Scaled(280), Scaled(200));
                 SetBoundsProgrammatically(WindowRules.KeepOnScreen(settings.BackgroundBounds,
-                    Scaled(280), Scaled(160), new Size(Scaled(360), Scaled(160))));
+                    Scaled(280), Scaled(200), new Size(Scaled(360), Scaled(200))));
             }
             LayoutWindow();
         }
@@ -139,6 +162,9 @@ namespace MiniView.WebView2App
             nextVideoButton.SetBounds(margin + width + gap, Scaled(32), width, Scaled(30));
             backgroundMuteButton.SetBounds(margin, Scaled(70), width, Scaled(30));
             restoreVideoButton.SetBounds(margin + width + gap, Scaled(70), width, Scaled(30));
+            backgroundVolumeLabel.SetBounds(margin, Scaled(108), Scaled(82), Scaled(30));
+            backgroundVolumeSlider.SetBounds(margin + Scaled(82), Scaled(108),
+                Math.Max(1, backgroundPanel.Width - margin * 2 - Scaled(82)), Scaled(30));
             if (backgroundPanel.Visible) backgroundPanel.BringToFront();
         }
 
@@ -146,10 +172,17 @@ namespace MiniView.WebView2App
         {
             backgroundMenuItem.Checked = backgroundMode;
             backgroundMenuItem.Text = backgroundMode ? "恢复视频画面" : "后台播放（隐藏画面）";
-            bool canSwitch = backgroundMode && Visible && !currentIsLive && !videoSwitchPending;
+            bool standaloneLive = currentIsLive && webView.Source != null && WindowRules.IsLiveUrl(webView.Source.AbsoluteUri);
+            bool canSwitch = backgroundMode && Visible && !standaloneLive && !videoSwitchPending;
             previousVideoButton.Enabled = nextVideoButton.Enabled = canSwitch;
-            backgroundPlaybackStatus.Text = currentIsLive ? "直播声音播放中" : videoSwitchPending ? "正在切换视频…" : "后台播放 · 播完自动下一条";
+            backgroundPlaybackStatus.Text = !string.IsNullOrEmpty(transientNotice) ? transientNotice
+                : videoSwitchPending ? "正在切换视频…"
+                : standaloneLive ? "独立直播间 · 恢复画面可返回推荐流"
+                : currentIsLive ? "直播声音播放中 · 可手动切换" : "后台播放 · 播完自动下一条";
+            toolTip.SetToolTip(backgroundPlaybackStatus, backgroundPlaybackStatus.Text);
             backgroundMuteButton.Text = settings.Muted ? "恢复声音" : "静音";
+            backgroundVolumeLabel.Text = "音量 " + settings.BackgroundVolume + "%";
+            toolTip.SetToolTip(backgroundVolumeSlider, settings.Muted ? "当前已静音，点击恢复声音后生效" : "后台音量 " + settings.BackgroundVolume + "%");
             toolTip.SetToolTip(previousVideoButton, "上一条" + FormatShortcut(previousVideoHotkey));
             toolTip.SetToolTip(nextVideoButton, "下一条" + FormatShortcut(nextVideoHotkey));
         }
@@ -182,7 +215,13 @@ namespace MiniView.WebView2App
             long revision = ++backgroundRevision;
             if (!webViewReady || webView.CoreWebView2 == null || webViewSuspended || isQuitting) return;
             await webView.ExecuteScriptAsync(BackgroundScripts.Build(revision, navigationGeneration,
-                backgroundMode, backgroundMode && Visible, currentIsLive));
+                backgroundMode, backgroundMode && Visible, currentIsLive, settings.BackgroundVolume));
+        }
+
+        private async Task ApplyBackgroundVolumeAsync()
+        {
+            if (!backgroundMode || !webViewReady || webView.CoreWebView2 == null || webViewSuspended || isQuitting) return;
+            await webView.ExecuteScriptAsync(BackgroundScripts.Volume(backgroundRevision, settings.BackgroundVolume));
         }
 
         private void RequestVideoSwitch(int direction)
@@ -197,20 +236,21 @@ namespace MiniView.WebView2App
 
         private bool CanSwitchVideo(long revision, int navigation, long operation)
         {
-            return backgroundMode && Visible && !currentIsLive && !isQuitting && !IsDisposed
+            return backgroundMode && Visible && !isQuitting && !IsDisposed
                 && webViewReady && !webViewSuspended && revision == backgroundRevision
                 && navigation == navigationGeneration && lifecycle.IsCurrent(operation);
         }
 
         private async Task SwitchVideoAsync(int direction, string automaticToken)
         {
-            if (!backgroundMode || !Visible || currentIsLive || !webViewReady || webViewSuspended || videoSwitchPending || isQuitting) return;
+            if (!backgroundMode || !Visible || (automaticToken != null && currentIsLive) || !webViewReady || webViewSuspended || videoSwitchPending || isQuitting) return;
             long revision = backgroundRevision, operation = lifecycle.Generation;
             int navigation = navigationGeneration;
             videoSwitchPending = true;
             UpdateBackgroundControls();
             try
             {
+                ClearTransientNotice();
                 string token = await ReadBackgroundTokenAsync();
                 if (!CanSwitchVideo(revision, navigation, operation)) return;
                 if (automaticToken != null && automaticToken != token) return;
@@ -231,15 +271,24 @@ namespace MiniView.WebView2App
                 }
                 else if (action != "native")
                 {
-                    ShowTransientNotice("当前页面暂不支持切换，请恢复画面检查登录或推荐列表。");
+                    ShowTransientNotice(action == "live-room" ? "独立直播间，请恢复画面返回推荐流。"
+                        : action == "blocked" ? "请恢复画面处理弹窗后再切换。" : "此页不支持切换，请返回推荐流。");
                     return;
                 }
                 DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+                DateTime wheelFallbackAt = DateTime.UtcNow.AddMilliseconds(1500);
+                bool wheelAttempted = false;
                 while (DateTime.UtcNow < deadline && CanSwitchVideo(revision, navigation, operation))
                 {
                     string next = await ReadBackgroundTokenAsync();
                     if (!CanSwitchVideo(revision, navigation, operation)) return;
                     if (!string.IsNullOrEmpty(next) && next != token) return;
+                    if (!wheelAttempted && DateTime.UtcNow >= wheelFallbackAt)
+                    {
+                        wheelAttempted = true;
+                        await webView.ExecuteScriptAsync(BackgroundScripts.Wheel(direction, token));
+                        if (!CanSwitchVideo(revision, navigation, operation)) return;
+                    }
                     await Task.Delay(80);
                 }
                 if (CanSwitchVideo(revision, navigation, operation)) ShowTransientNotice("视频切换未完成，请恢复画面检查后重试。");
@@ -255,6 +304,7 @@ namespace MiniView.WebView2App
                 if (!isQuitting && !IsDisposed) UpdateBackgroundControls();
             }
         }
+
 
         private bool HandleBackgroundMessage(string message)
         {

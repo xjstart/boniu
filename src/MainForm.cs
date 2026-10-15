@@ -614,7 +614,10 @@ namespace MiniView.WebView2App
             LayoutToolbarButtons(toolbarHeight);
             settingsPanel.Bounds = contentHost.ClientRectangle;
             LayoutBackgroundPanel();
-            pageNotice.SetBounds(Scaled(8), Scaled(8), Math.Max(1, contentHost.Width - Scaled(16)), Scaled(36));
+            if (backgroundMode && !settingsOpen)
+                pageNotice.SetBounds(Scaled(10), Scaled(2), Math.Max(1, contentHost.Width - Scaled(20)), Scaled(26));
+            else
+                pageNotice.SetBounds(Scaled(8), Scaled(8), Math.Max(1, contentHost.Width - Scaled(16)), Scaled(36));
             RefreshPageNotice();
             ApplyWindowShape();
             Diagnostics.Mark("LayoutWindow exit tb=" + toolbarHeight + " client=" + ClientSize);

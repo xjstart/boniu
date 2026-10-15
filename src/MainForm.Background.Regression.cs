@@ -34,7 +34,7 @@ namespace MiniView.WebView2App
             await WaitForPageAsync("window.__boniuBackground && window.__boniuBackground.enabled && !document.getElementById('playing').loop");
             AssertRegression(backgroundMode && !webView.Visible && backgroundPanel.Visible && toolbar.Visible, "background hides picture and keeps controls");
             AssertRegression(webView.Size == viewport && webView.ZoomFactor == zoom, "background retains original viewport and zoom");
-            AssertRegression(Width == Scaled(360) && Height == Scaled(160), "background default compact dimensions");
+            AssertRegression(Width == Scaled(360) && Height == Scaled(200), "background default compact dimensions");
             using (Bitmap image = new Bitmap(ClientSize.Width, ClientSize.Height))
             {
                 DrawToBitmap(image, ClientRectangle);
@@ -42,6 +42,11 @@ namespace MiniView.WebView2App
                 image.Save(Path.Combine(appFolder, "background-fixture.png"), System.Drawing.Imaging.ImageFormat.Png);
             }
             AssertRegression(BackgroundLayoutAcrossScales(), "background controls fit minimum window at 100/125/150/200 percent DPI");
+            navigationFailed = true;
+            RefreshPageNotice();
+            AssertRegression(pageNotice.Visible && !pageNotice.Bounds.IntersectsWith(previousVideoButton.Bounds), "background navigation failure remains actionable without covering controls");
+            navigationFailed = false;
+            RefreshPageNotice();
             await webView.ExecuteScriptAsync("window.backgroundTime=document.getElementById('playing').currentTime");
             await Task.Delay(350);
             AssertRegression(await PageIsTrueAsync("document.getElementById('playing').currentTime > window.backgroundTime && document.getElementById('manual').paused"), "hidden picture continues playing; manual pause preserved");
@@ -52,8 +57,23 @@ namespace MiniView.WebView2App
             await SuspendWebViewIfHiddenAsync();
             AssertRegression(!webViewSuspended && !suspendTimer.Enabled, "active background playback never suspends");
 
+            backgroundVolumeSlider.Value = 35;
+            await WaitForPageAsync("Math.abs(document.getElementById('playing').volume-0.35)<0.001");
+            AssertRegression(settings.BackgroundVolume == 35 && backgroundVolumeLabel.Text.Contains("35%"), "slider sets media volume and saved preference");
+            backgroundVolumeSlider.Value = 0;
+            await WaitForPageAsync("document.getElementById('playing').volume===0");
+            AssertRegression(await PageIsTrueAsync("!document.getElementById('playing').paused && document.getElementById('manual').paused"), "zero volume does not change playback or manual pause");
+            ToggleMute();
+            backgroundVolumeSlider.Value = 35;
+            await WaitForPageAsync("Math.abs(document.getElementById('playing').volume-0.35)<0.001");
+            AssertRegression(webView.CoreWebView2.IsMuted, "volume adjustment preserves explicit host mute");
+            ToggleMute();
+
+            await webView.ExecuteScriptAsync("document.querySelector('[aria-label=上一条]').className='xgplayer-playswitch-prev';document.querySelector('[aria-label=下一条]').className='xgplayer-playswitch-next';document.querySelectorAll('button[aria-label]').forEach(b=>b.removeAttribute('aria-label'))");
             await SwitchVideoAsync(1, null);
-            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 2 && window.fixtureSwitches === 1"), "next uses native feed control");
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 2 && window.fixtureSwitches === 1"), "next uses real Douyin native control without aria label");
+            await WaitForPageAsync("Math.abs(document.getElementById('playing').volume-0.35)<0.001");
+            AssertRegression(await PageIsTrueAsync("document.getElementById('playing').volume<0.36"), "replacement video inherits background volume");
             await SwitchVideoAsync(-1, null);
             AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 1 && window.fixtureSwitches === 2"), "previous uses native feed control");
             await webView.ExecuteScriptAsync("window.fixtureReuse=true");
@@ -82,6 +102,7 @@ namespace MiniView.WebView2App
             ShowWindow();
             await WaitForPageAsync("!document.getElementById('playing').paused && window.__boniuBackground.allowed");
             AssertRegression(backgroundMode && !webView.Visible && !webView.CoreWebView2.IsMuted, "show restores audio controls without exposing picture");
+            AssertRegression(await PageIsTrueAsync("Math.abs(document.getElementById('playing').volume-0.35)<0.001"), "boss hide and restore preserve volume");
             HandleBackgroundMessage("boniu:background-ended:" + navigationGeneration + ":" + staleRevision + ":" + staleToken);
             await Task.Delay(350);
             AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 4"), "stale background ended message rejected");
@@ -110,29 +131,71 @@ namespace MiniView.WebView2App
             settings.ImmersiveMode = true;
             ApplyChromeState(true);
             AssertRegression(toolbar.Visible && !ToolbarCollapsed && !webView.Visible, "background retains controls with hidden chrome and immersive settings");
-            await webView.ExecuteScriptAsync("const live=document.createElement('div');live.id='PlayerLayout';live.innerHTML='<div class=\"__livingPlayer__\"></div>';document.body.appendChild(live)");
+            await webView.ExecuteScriptAsync("const live=document.getElementById('playing').parentElement;live.setAttribute('data-e2e','feed-live');live.style.cssText='width:100%;height:100%'");
             await DetectLiveStateAsync();
             await WaitForPageAsync("window.__boniuBackground.live");
-            AssertRegression(!previousVideoButton.Enabled && !nextVideoButton.Enabled && backgroundPlaybackStatus.Text.Contains("直播"), "live background disables video navigation");
+            AssertRegression(previousVideoButton.Enabled && nextVideoButton.Enabled && backgroundPlaybackStatus.Text.Contains("直播"), "feed live card keeps manual video navigation");
             AssertRegression(Bounds == compact, "live detection does not resize background controls");
-            await SwitchVideoAsync(1, null);
             await webView.ExecuteScriptAsync("document.getElementById('playing').dispatchEvent(new Event('ended'))");
             await Task.Delay(350);
             AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 4"), "live background never auto advances");
-            await webView.ExecuteScriptAsync("document.getElementById('PlayerLayout').remove()");
+            await SwitchVideoAsync(1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 5"), "native next leaves a live feed card");
+            await SwitchVideoAsync(-1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 4"), "native previous leaves a live feed card");
+            await webView.ExecuteScriptAsync("document.getElementById('playing').parentElement.setAttribute('data-e2e','feed-active-video')");
+            await DetectLiveStateAsync();
+            await WaitForPageAsync("!window.__boniuBackground.live");
+            await webView.ExecuteScriptAsync("const cached=document.createElement('div');cached.id='cached-live';cached.setAttribute('data-e2e','feed-live');cached.style.cssText='position:fixed;top:200vh;width:100%;height:100%';const v=document.createElement('video');v.style.cssText='width:100%;height:100%';cached.appendChild(v);document.body.prepend(cached)");
+            AssertRegression(await PageIsTrueAsync("!window.__boniuBackground.isLive() && window.__boniuBackground.pick().id==='playing'"), "offscreen preloaded live card does not replace active short video");
+            await webView.ExecuteScriptAsync("document.getElementById('cached-live').remove()");
+
+            await webView.ExecuteScriptAsync(@"window.canvasVideo=document.getElementById('playing');window.canvasCard=canvasVideo.parentElement;
+                canvasCard.setAttribute('data-e2e','feed-item');canvasVideo.pause();canvasVideo.remove();
+                window.canvasRenderer=document.createElement('canvas');canvasRenderer.className='douyin-player';canvasCard.appendChild(canvasRenderer);
+                window.savedFixtureSwitch=window.fixtureSwitch;
+                window.fixtureSwitch=direction=>{window.fixtureIndex+=direction;window.canvasCard.setAttribute('data-room-id',String(window.fixtureIndex));};");
+            await DetectLiveStateAsync();
+            await WaitForPageAsync("window.__boniuBackground.live");
+            string canvasToken = await ReadBackgroundTokenAsync();
+            AssertRegression(!string.IsNullOrEmpty(canvasToken) && await PageIsTrueAsync("!window.__boniuBackground.current"), "canvas live card has navigation identity without a video element");
+            await SwitchVideoAsync(1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex===5") && await ReadBackgroundTokenAsync() != canvasToken, "canvas live next confirms recycled card room identity");
+            await SwitchVideoAsync(-1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex===4"), "canvas live previous remains available");
+            await webView.ExecuteScriptAsync("canvasRenderer.remove();canvasCard.removeAttribute('data-room-id');canvasCard.setAttribute('data-e2e','feed-active-video');canvasCard.appendChild(canvasVideo);window.fixtureSwitch=window.savedFixtureSwitch;canvasVideo.play()");
+            await DetectLiveStateAsync();
+            await WaitForPageAsync("!window.__boniuBackground.live");
+            string beforeFrozenSwitch = await ReadBackgroundTokenAsync();
+            await webView.ExecuteScriptAsync(@"canvasCard.setAttribute('data-e2e','feed-video');
+                const next=document.createElement('div');next.id='frozen-next';next.setAttribute('data-e2e','feed-active-live');next.setAttribute('data-room-id','next-room');
+                next.style.cssText='position:fixed;top:200vh;width:100px;height:100px';next.innerHTML='<canvas class=douyin-player></canvas>';document.body.appendChild(next)");
+            AssertRegression(await ReadBackgroundTokenAsync() != beforeFrozenSwitch
+                && await PageIsTrueAsync("window.__boniuBackground.isLive() && !window.__boniuBackground.current"),
+                "logical active live card wins when hidden compositor leaves previous video on screen");
+            await webView.ExecuteScriptAsync("document.getElementById('frozen-next').remove();canvasCard.setAttribute('data-e2e','feed-active-video')");
             await DetectLiveStateAsync();
             await WaitForPageAsync("!window.__boniuBackground.live");
 
-            await webView.ExecuteScriptAsync("const d=document.createElement('div');d.setAttribute('role','dialog');d.id='blocked-dialog';d.style.cssText='position:fixed;width:100px;height:100px';document.body.appendChild(d)");
+            await webView.ExecuteScriptAsync("const d=document.createElement('div');d.setAttribute('role','dialog');d.id='blocked-dialog';d.style.cssText='position:fixed;top:0;left:0;width:100px;height:100px';document.body.appendChild(d)");
             await SwitchVideoAsync(1, null);
             AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 4") && !string.IsNullOrEmpty(transientNotice), "dialog blocks navigation and shows inline notice");
+            AssertRegression(!pageNotice.Visible && backgroundPlaybackStatus.Text == transientNotice, "background notice occupies status row without covering buttons");
+            await webView.ExecuteScriptAsync("document.getElementById('blocked-dialog').removeAttribute('role');document.getElementById('blocked-dialog').className='douyin_login_new_class'");
+            await SwitchVideoAsync(1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex===4") && transientNotice.Contains("弹窗"), "current Douyin login overlay without dialog role blocks navigation");
             await webView.ExecuteScriptAsync("document.getElementById('blocked-dialog').remove();document.querySelectorAll('button').forEach(b=>b.remove());document.addEventListener('keydown',e=>{if(e.key==='ArrowDown')window.fixtureSwitch(1);if(e.key==='ArrowUp')window.fixtureSwitch(-1)})");
-            await webView.ExecuteScriptAsync("document.getElementById('playing').style.display='none'");
+            await webView.ExecuteScriptAsync("document.getElementById('playing').parentElement.style.display='none'");
             await SwitchVideoAsync(1, null);
             AssertRegression(transientNotice.Contains("没有") && await PageIsTrueAsync("window.fixtureIndex === 4"), "empty video page shows recoverable notice without switching");
-            await webView.ExecuteScriptAsync("document.getElementById('playing').style.display=''");
+            await webView.ExecuteScriptAsync("document.getElementById('playing').parentElement.style.display=''");
+            await webView.ExecuteScriptAsync("document.getElementById('playing').parentElement.setAttribute('data-e2e','feed-live')");
             await SwitchVideoAsync(1, null);
-            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 5"), "CDP key fallback switches within unfocused hidden WebView");
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 5"), "CDP key fallback switches live card without feed-active-video marker");
+            await webView.ExecuteScriptAsync("document.getElementById('playing').parentElement.id='PlayerLayout';document.querySelector('[data-e2e]').removeAttribute('data-e2e')");
+            await SwitchVideoAsync(1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex===5") && transientNotice.Contains("独立直播间"), "standalone live room gives actionable notice instead of generic unsupported error");
+            await webView.ExecuteScriptAsync("document.getElementById('PlayerLayout').removeAttribute('id');document.getElementById('playing').parentElement.setAttribute('data-e2e','feed-active-video')");
             await webView.ExecuteScriptAsync("document.querySelector('[data-e2e]').removeAttribute('data-e2e')");
             await SwitchVideoAsync(1, null);
             AssertRegression(await PageIsTrueAsync("window.fixtureIndex === 5") && transientNotice.Contains("不支持"), "unsupported page fails once without retries");
@@ -168,7 +231,7 @@ namespace MiniView.WebView2App
                 throw new InvalidOperationException("Natural video ended and advance");
             }
             await WaitForConditionAsync(delegate { return !videoSwitchPending; }, "natural ended switch completes", 5000);
-            AssertRegression(await PageIsTrueAsync("window.fixtureSwitches === 7 && !document.getElementById('playing').paused"), "finite local video ends and automatically advances once");
+            AssertRegression(await PageIsTrueAsync("window.fixtureSwitches === 9 && !document.getElementById('playing').paused"), "finite local video ends and automatically advances once");
             settings.Muted = false;
             await ApplyMediaStateAsync();
 
@@ -177,6 +240,10 @@ namespace MiniView.WebView2App
             await SwitchVideoAsync(1, null);
             await switching;
             AssertRegression(!videoSwitchPending && transientNotice.Contains("未完成") && await PageIsTrueAsync("window.fixtureIndex === 6"), "duplicate requests merge and stalled switch times out once");
+            await webView.ExecuteScriptAsync("window.fixtureWheels=0;document.addEventListener('wheel',e=>{window.fixtureWheels++;window.fixtureSwitch(e.deltaY>0?1:-1)},{once:true})");
+            await SwitchVideoAsync(1, null);
+            AssertRegression(await PageIsTrueAsync("window.fixtureIndex===7 && window.fixtureWheels===1") && string.IsNullOrEmpty(transientNotice),
+                "unresponsive native switch falls back to one page-local wheel event");
             await webView.ExecuteScriptAsync("document.getElementById('no-op-next').remove()");
 
             settings.ChromeHidden = false;
@@ -201,6 +268,8 @@ namespace MiniView.WebView2App
             webView.NavigateToString(RegressionHtml);
             await WaitForPageAsync("window.fixtureReady && window.__boniuBackground && window.__boniuBackground.enabled");
             AssertRegression(backgroundMode && !webView.Visible, "navigation keeps background picture hidden");
+            await WaitForPageAsync("Math.abs(document.getElementById('playing').volume-0.35)<0.001");
+            AssertRegression(backgroundVolumeSlider.Value == 35, "volume survives mode toggles and navigation");
             ToggleBackgroundMode();
             await WaitForPageAsync("window.__boniuBackground && !window.__boniuBackground.enabled");
             AssertRegression(await BackgroundPictureRendersAsync(), "picture restores after navigation in background");
@@ -239,11 +308,13 @@ namespace MiniView.WebView2App
             foreach (float scale in new[] { 1F, 1.25F, 1.5F, 2F })
             {
                 uiScale = scale;
-                MinimumSize = new Size(Scaled(280), Scaled(160));
-                SetBoundsProgrammatically(new Rectangle(Left, Top, Scaled(280), Scaled(160)));
+                MinimumSize = new Size(Scaled(280), Scaled(200));
+                SetBoundsProgrammatically(new Rectangle(Left, Top, Scaled(280), Scaled(200)));
                 LayoutWindow();
                 foreach (Control button in new Control[] { previousVideoButton, nextVideoButton, backgroundMuteButton, restoreVideoButton })
                     valid &= backgroundPanel.ClientRectangle.Contains(button.Bounds) && button.Width >= Scaled(100);
+                valid &= backgroundPanel.ClientRectangle.Contains(backgroundVolumeSlider.Bounds)
+                    && backgroundPanel.ClientRectangle.Contains(backgroundVolumeLabel.Bounds);
                 valid &= toolbar.Visible && !ToolbarCollapsed && toolbar.ClientRectangle.Contains(settingsButton.Bounds)
                     && toolbar.ClientRectangle.Contains(hideButton.Bounds) && toolbar.ClientRectangle.Contains(closeButton.Bounds);
             }

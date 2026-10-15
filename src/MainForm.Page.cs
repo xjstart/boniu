@@ -47,7 +47,7 @@ namespace MiniView.WebView2App
             bool hasLivePlayer = false;
             try
             {
-                string result = await webView.ExecuteScriptAsync(backgroundMode ? PageScripts.LiveStateScript : PageScripts.LiveProbeScript);
+                string result = await webView.ExecuteScriptAsync(backgroundMode ? BackgroundScripts.LiveState : PageScripts.LiveProbeScript);
                 hasLivePlayer = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception exception)
@@ -165,7 +165,9 @@ namespace MiniView.WebView2App
             pageNotice.Text = hasTransient ? transientNotice
                 : navigationFailed ? "页面加载失败 · 点击重试"
                 : "已恢复标准布局 · 点击重试清爽样式";
-            pageNotice.Visible = hasTransient || (!settingsOpen && (navigationFailed || (!backgroundMode && pageStyleFallback)));
+            pageNotice.Visible = (hasTransient && (!backgroundMode || settingsOpen))
+                || (!settingsOpen && (navigationFailed || (!backgroundMode && pageStyleFallback)));
+            if (backgroundMode) UpdateBackgroundControls();
             if (pageNotice.Visible) pageNotice.BringToFront();
             toolTip.SetToolTip(pageNotice, hasTransient ? transientNotice
                 : navigationFailed ? "请检查网络连接，然后点击重试。"

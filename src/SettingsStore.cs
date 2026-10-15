@@ -32,6 +32,12 @@ namespace MiniView.WebView2App
         public string HideShortcut { get; set; }
         public string ChromeShortcut { get; set; }
         public bool Muted { get; set; }
+        private int backgroundVolume = 100;
+        public int BackgroundVolume
+        {
+            get { return backgroundVolume; }
+            set { backgroundVolume = Math.Max(0, Math.Min(100, value)); }
+        }
         public bool ShowTrayIcon { get; set; }
         public bool AutoHideEnabled { get; set; }
         public int AutoHideDelayMilliseconds { get; set; }

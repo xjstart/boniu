@@ -246,6 +246,13 @@ namespace MiniView.WebView2App
             failures += Check(upgradedSettings.AutoHideEnabled, "旧设置升级后保持鼠标移出隐藏");
             failures += Check(upgradedSettings.AutoHideDelayMilliseconds == 100, "旧设置升级后使用 0.1 秒延迟");
             failures += Check(!upgradedSettings.EdgeAutoHideEnabled, "旧设置升级后默认不开启贴边自动隐藏");
+            failures += Check(upgradedSettings.BackgroundVolume == 100, "旧设置后台音量默认为 100%");
+            failures += Check(serializer.Deserialize<AppSettings>(serializer.Serialize(new AppSettings { BackgroundVolume = 35 })).BackgroundVolume == 35,
+                "后台音量可持久保存");
+            failures += Check(serializer.Deserialize<AppSettings>("{\"BackgroundVolume\":0}").BackgroundVolume == 0,
+                "零音量加载时不会恢复默认值");
+            failures += Check(serializer.Deserialize<AppSettings>("{\"BackgroundVolume\":-2}").BackgroundVolume == 0
+                && serializer.Deserialize<AppSettings>("{\"BackgroundVolume\":150}").BackgroundVolume == 100, "后台音量限制在 0 到 100");
             HotkeyDefinition previousDefault;
             HotkeyDefinition nextDefault;
             failures += Check(HotkeyDefinition.TryParse(upgradedSettings.PreviousVideoShortcut, out previousDefault)
