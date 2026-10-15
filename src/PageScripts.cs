@@ -132,6 +132,7 @@ namespace MiniView.WebView2App
     healthEvents.forEach(function(e){addEventListener(e,reset,true);});
     window[HK]=[reset];
     window[H]=setInterval(function(){
+      if(window.__boniuBackground&&window.__boniuBackground.enabled)return;
       var s=document.getElementById(S);
       if(!s||s.getAttribute('data-immersive')!=='1'){stopHealthGuard();return;}
       var videos=document.querySelectorAll('video');
@@ -239,6 +240,8 @@ namespace MiniView.WebView2App
             out.center = at(innerWidth * 0.5, innerHeight * 0.45);
             return out;
           })()";
+
+        internal const string LiveStateScript = @"Boolean(document.querySelector('#PlayerLayout > .__livingPlayer__, [data-e2e=""living-container""] #PlayerLayout'))";
 
         internal const string LiveProbeScript = @"(() => {
             const live = Boolean(document.querySelector('#PlayerLayout > .__livingPlayer__, [data-e2e=""living-container""] #PlayerLayout'));

@@ -42,8 +42,17 @@ namespace MiniView.WebView2App
             AddInlineRow(hotkeyCard, "清爽模式", immersiveShortcutStatus, immersiveShortcutButton, 104, 30);
             AddInlineRow(hotkeyCard, "迷你小窗", miniShortcutStatus, miniShortcutButton, 104, 30);
             AddInlineRow(hotkeyCard, "静音/恢复声音", muteShortcutStatus, muteShortcutButton, 104, 30);
+            AddInlineRow(hotkeyCard, "后台上一条", previousVideoShortcutStatus, previousVideoShortcutButton, 140, 30);
+            AddInlineRow(hotkeyCard, "后台下一条", nextVideoShortcutStatus, nextVideoShortcutButton, 140, 30);
+            previousVideoShortcutButton.Click += delegate { BeginShortcutCapture("previous"); };
+            nextVideoShortcutButton.Click += delegate { BeginShortcutCapture("next"); };
 
             SettingsCard behaviorCard = AddCard("行为");
+            AddInlineRow(behaviorCard, "后台播放（隐藏画面）", backgroundModeStatus, backgroundModeToggle, 44, 26);
+            backgroundModeToggle.CheckedChanged += delegate
+            {
+                if (backgroundModeToggle.Checked != backgroundMode) ToggleBackgroundMode();
+            };
             AddInlineRow(behaviorCard, "鼠标移出自动隐藏", autoHideStatus, autoHideToggle, 44, 26);
             delayRow = AddStackedRow(behaviorCard, "隐藏延迟", autoHideDelayPicker, 28);
             AddInlineRow(behaviorCard, "贴边自动隐藏", edgeHideStatus, edgeHideToggle, 44, 26);
@@ -590,12 +599,15 @@ namespace MiniView.WebView2App
                 "恢复默认设置")) return;
 
             UnregisterAllHotkeys();
+            if (backgroundMode) ToggleBackgroundMode();
             settings = new AppSettings();
             windowHotkey = ParseShortcut(settings.HideShortcut, Keys.D);
             chromeHotkey = ParseShortcut(settings.ChromeShortcut, Keys.B);
             muteHotkey = ParseShortcut(settings.MuteShortcut, Keys.M);
             immersiveHotkey = ParseShortcut(settings.ImmersiveShortcut, Keys.F);
             miniHotkey = ParseShortcut(settings.MiniShortcut, Keys.S);
+            previousVideoHotkey = ParseShortcut(settings.PreviousVideoShortcut, Keys.Up);
+            nextVideoHotkey = ParseShortcut(settings.NextVideoShortcut, Keys.Down);
             TopMost = settings.AlwaysOnTop;
             if (webViewReady) webView.CoreWebView2.IsMuted = settings.Muted;
             liveLandscapeApplied = false;
@@ -659,6 +671,7 @@ namespace MiniView.WebView2App
 
         private void UpdateSettingsUi()
         {
+            UpdateBackgroundSettings();
             UpdateRecoveryTray();
             trayToggle.Checked = settings.ShowTrayIcon;
             trayStatus.Text = !windowHotkeyAvailable && IsHandleCreated ? "快捷键不可用时自动保留恢复入口" : settings.ShowTrayIcon ? "双击托盘图标恢复窗口" : "关闭；仍可重新打开程序恢复";
@@ -701,8 +714,10 @@ namespace MiniView.WebView2App
                 : edgeDockSide == EdgeDockSide.Left ? "已启用；当前贴靠左边缘"
                 : edgeDockSide == EdgeDockSide.Right ? "已启用；当前贴靠右边缘"
                 : "已启用；拖到屏幕左/右边缘收起";
+            if (backgroundMode) autoHideStatus.Text = "后台播放期间暂不自动隐藏";
             inactiveHideToggle.Checked = settings.HideWhenInactive;
             inactiveHideStatus.Text = settings.HideWhenInactive ? "切换到其他程序时隐藏" : "已关闭；锁屏时仍会隐藏";
+            if (backgroundMode) inactiveHideStatus.Text = "后台播放期间暂不失焦隐藏";
             landscapeToggle.Checked = settings.AutoLandscapeLive;
             liveStatus.Text = currentIsLive && settings.AutoLandscapeLive ? "直播中" : settings.AutoLandscapeLive ? "已开启" : "已关闭";
             leftNavToggle.Checked = settings.HideLeftNav;

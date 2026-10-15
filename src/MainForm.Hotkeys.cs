@@ -74,6 +74,8 @@ namespace MiniView.WebView2App
             if (captureTarget == "window") windowHotkey = candidate;
             else if (captureTarget == "chrome") chromeHotkey = candidate;
             else if (captureTarget == "mute") muteHotkey = candidate;
+            else if (captureTarget == "previous") previousVideoHotkey = candidate;
+            else if (captureTarget == "next") nextVideoHotkey = candidate;
             else immersiveHotkey = candidate;
             SetHotkeyAvailable(captureTarget, true);
             PersistShortcut(captureTarget, candidate);
@@ -90,6 +92,8 @@ namespace MiniView.WebView2App
             if (target == "window") windowHotkey = null;
             else if (target == "chrome") chromeHotkey = null;
             else if (target == "mute") muteHotkey = null;
+            else if (target == "previous") previousVideoHotkey = null;
+            else if (target == "next") nextVideoHotkey = null;
             else immersiveHotkey = null;
             PersistShortcut(target, null);
             ScheduleSettingsSave();
@@ -101,6 +105,8 @@ namespace MiniView.WebView2App
             if (target == "window") return windowShortcutButton;
             if (target == "chrome") return chromeShortcutButton;
             if (target == "mini") return miniShortcutButton;
+            if (target == "previous") return previousVideoShortcutButton;
+            if (target == "next") return nextVideoShortcutButton;
             return target == "mute" ? muteShortcutButton : immersiveShortcutButton;
         }
 
@@ -109,6 +115,8 @@ namespace MiniView.WebView2App
             if (target == "window") return windowShortcutStatus;
             if (target == "chrome") return chromeShortcutStatus;
             if (target == "mini") return miniShortcutStatus;
+            if (target == "previous") return previousVideoShortcutStatus;
+            if (target == "next") return nextVideoShortcutStatus;
             return target == "mute" ? muteShortcutStatus : immersiveShortcutStatus;
         }
 
@@ -117,6 +125,8 @@ namespace MiniView.WebView2App
             if (target == "window") return HotkeyWindow;
             if (target == "chrome") return HotkeyChrome;
             if (target == "mini") return HotkeyMini;
+            if (target == "previous") return HotkeyPreviousVideo;
+            if (target == "next") return HotkeyNextVideo;
             return target == "mute" ? HotkeyMute : HotkeyImmersive;
         }
 
@@ -125,6 +135,8 @@ namespace MiniView.WebView2App
             if (target == "window") return windowHotkey;
             if (target == "chrome") return chromeHotkey;
             if (target == "mini") return miniHotkey;
+            if (target == "previous") return previousVideoHotkey;
+            if (target == "next") return nextVideoHotkey;
             return target == "mute" ? muteHotkey : immersiveHotkey;
         }
 
@@ -134,6 +146,8 @@ namespace MiniView.WebView2App
             else if (target == "chrome") chromeHotkeyAvailable = available;
             else if (target == "mini") miniHotkeyAvailable = available;
             else if (target == "mute") muteHotkeyAvailable = available;
+            else if (target == "previous") previousVideoHotkeyAvailable = available;
+            else if (target == "next") nextVideoHotkeyAvailable = available;
             else immersiveHotkeyAvailable = available;
         }
 
@@ -144,12 +158,14 @@ namespace MiniView.WebView2App
             else if (target == "chrome") settings.ChromeShortcut = value;
             else if (target == "mini") settings.MiniShortcut = value;
             else if (target == "mute") settings.MuteShortcut = value;
+            else if (target == "previous") settings.PreviousVideoShortcut = value;
+            else if (target == "next") settings.NextVideoShortcut = value;
             else settings.ImmersiveShortcut = value;
         }
 
         private bool ConflictsWithAnyRegistered(string target, HotkeyDefinition candidate)
         {
-            string[] others = { "window", "chrome", "mute", "immersive", "mini" };
+            string[] others = { "window", "chrome", "mute", "immersive", "mini", "previous", "next" };
             foreach (string other in others)
             {
                 if (other == target) continue;
@@ -202,6 +218,8 @@ namespace MiniView.WebView2App
             muteHotkeyAvailable = RegisterHotkey(HotkeyMute, muteHotkey);
             immersiveHotkeyAvailable = RegisterHotkey(HotkeyImmersive, immersiveHotkey);
             miniHotkeyAvailable = RegisterHotkey(HotkeyMini, miniHotkey);
+            previousVideoHotkeyAvailable = RegisterHotkey(HotkeyPreviousVideo, previousVideoHotkey);
+            nextVideoHotkeyAvailable = RegisterHotkey(HotkeyNextVideo, nextVideoHotkey);
             UpdateRecoveryTray();
             string warnings = "";
             if (windowHotkey != null && !windowHotkeyAvailable)
@@ -217,12 +235,17 @@ namespace MiniView.WebView2App
                 warnings += immersiveHotkey.Display() + " 已被占用：清爽模式本次不可用，请在设置中更换快捷键。 ";
             if (miniHotkey != null && !miniHotkeyAvailable)
                 warnings += miniHotkey.Display() + " 已被占用：迷你小窗本次不可用，请在设置中更换快捷键。 ";
+            if (previousVideoHotkey != null && !previousVideoHotkeyAvailable)
+                warnings += previousVideoHotkey.Display() + " 已被占用：上一条快捷键不可用，仍可使用按钮。 ";
+            if (nextVideoHotkey != null && !nextVideoHotkeyAvailable)
+                warnings += nextVideoHotkey.Display() + " 已被占用：下一条快捷键不可用，仍可使用按钮。 ";
             if (warnings.Length > 0) ShowTransientNotice(warnings.Trim());
             UpdateSettingsUi();
         }
 
         private bool RegisterHotkey(int id, HotkeyDefinition definition)
         {
+            if (IsTestMode) return definition != null;
             NativeMethods.UnregisterHotKey(Handle, id);
             if (definition == null) return false;
             return NativeMethods.RegisterHotKey(Handle, id, definition.NativeModifiers, (uint)definition.Key);
@@ -230,18 +253,20 @@ namespace MiniView.WebView2App
 
         private void UnregisterTargetHotkey(string target)
         {
-            NativeMethods.UnregisterHotKey(Handle, HotkeyIdFor(target));
+            if (!IsTestMode) NativeMethods.UnregisterHotKey(Handle, HotkeyIdFor(target));
             SetHotkeyAvailable(target, false);
         }
 
         private void UnregisterAllHotkeys()
         {
-            if (!IsHandleCreated) return;
+            if (!IsHandleCreated || IsTestMode) return;
             NativeMethods.UnregisterHotKey(Handle, HotkeyWindow);
             NativeMethods.UnregisterHotKey(Handle, HotkeyChrome);
             NativeMethods.UnregisterHotKey(Handle, HotkeyMute);
             NativeMethods.UnregisterHotKey(Handle, HotkeyImmersive);
             NativeMethods.UnregisterHotKey(Handle, HotkeyMini);
+            NativeMethods.UnregisterHotKey(Handle, HotkeyPreviousVideo);
+            NativeMethods.UnregisterHotKey(Handle, HotkeyNextVideo);
         }
 
     }

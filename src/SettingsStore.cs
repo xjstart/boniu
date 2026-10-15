@@ -25,6 +25,7 @@ namespace MiniView.WebView2App
         public BoundsData NormalBounds { get; set; }
         public BoundsData LiveBounds { get; set; }
         public BoundsData MiniBounds { get; set; }
+        public BoundsData BackgroundBounds { get; set; }
         public bool AlwaysOnTop { get; set; }
         public bool AutoLandscapeLive { get; set; }
         public bool ChromeHidden { get; set; }
@@ -46,6 +47,8 @@ namespace MiniView.WebView2App
         public string MuteShortcut { get; set; }
         public string MiniShortcut { get; set; }
         public bool MiniMode { get; set; }
+        public string PreviousVideoShortcut { get; set; }
+        public string NextVideoShortcut { get; set; }
 
         public AppSettings()
         {
@@ -55,6 +58,8 @@ namespace MiniView.WebView2App
             ImmersiveShortcut = "Control+Alt+F";
             MuteShortcut = "Control+Alt+M";
             MiniShortcut = "Control+Alt+S";
+            PreviousVideoShortcut = "Control+Alt+Up";
+            NextVideoShortcut = "Control+Alt+Down";
             AutoHideEnabled = true;
             AutoHideDelayMilliseconds = 100;
             AutoHideEnabledBeforeEdge = true;

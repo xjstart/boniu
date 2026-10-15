@@ -159,10 +159,11 @@ namespace MiniView.WebView2App
         private DateTime showGraceUntil;
 
         internal MainForm(bool smokeTest, bool liveSmokeTest, bool settingsSmokeTest, bool domProbe,
-            string updateHealthToken = null, bool regressionTest = false)
+            string updateHealthToken = null, bool regressionTest = false, bool backgroundRegressionOnly = false)
         {
             this.smokeTest = smokeTest;
             this.regressionTest = regressionTest;
+            this.backgroundRegressionOnly = backgroundRegressionOnly;
             this.liveSmokeTest = liveSmokeTest;
             this.settingsSmokeTest = settingsSmokeTest;
             this.domProbe = domProbe;
@@ -183,6 +184,8 @@ namespace MiniView.WebView2App
             muteHotkey = ParseShortcut(settings.MuteShortcut, Keys.M);
             immersiveHotkey = ParseShortcut(settings.ImmersiveShortcut, Keys.F);
             miniHotkey = ParseShortcut(settings.MiniShortcut, Keys.S);
+            previousVideoHotkey = ParseShortcut(settings.PreviousVideoShortcut, Keys.Up);
+            nextVideoHotkey = ParseShortcut(settings.NextVideoShortcut, Keys.Down);
 
             Text = "波妞摸鱼";
             FormBorderStyle = FormBorderStyle.None;
@@ -240,6 +243,9 @@ namespace MiniView.WebView2App
             overflowMenu.Items.Add(overflowBackItem);
             overflowMenu.Items.Add(overflowReloadItem);
             overflowMenu.Items.Add(overflowMiniItem);
+            backgroundMenuItem.Click += delegate { ToggleBackgroundMode(); };
+            overflowMenu.Items.Add(new ToolStripSeparator());
+            overflowMenu.Items.Add(backgroundMenuItem);
 
             RoundedButton[] buttons = { backButton, reloadButton, overflowButton, pinButton, muteButton, miniButton, settingsButton, chromeButton, hideButton, closeButton };
             foreach (RoundedButton button in buttons) toolbar.Controls.Add(button);
@@ -248,6 +254,8 @@ namespace MiniView.WebView2App
             webView.Dock = DockStyle.Fill;
             webView.DefaultBackgroundColor = Color.FromArgb(16, 16, 16);
             contentHost.Controls.Add(webView);
+            BuildBackgroundPanel();
+            contentHost.Controls.Add(backgroundPanel);
             BuildSettingsPanel();
             contentHost.Controls.Add(settingsPanel);
             pageNotice.Visible = false;
@@ -285,7 +293,8 @@ namespace MiniView.WebView2App
             Shown += async delegate
             {
                 if (!IsTestMode) { InitializeRecoveryTray(); RegisterAllHotkeys(); }
-                else windowHotkeyAvailable = chromeHotkeyAvailable = muteHotkeyAvailable = immersiveHotkeyAvailable = miniHotkeyAvailable = true;
+                else windowHotkeyAvailable = chromeHotkeyAvailable = muteHotkeyAvailable = immersiveHotkeyAvailable
+                    = miniHotkeyAvailable = previousVideoHotkeyAvailable = nextVideoHotkeyAvailable = true;
                 ApplyChromeState(settings.ChromeHidden);
                 showGraceUntil = DateTime.UtcNow.AddMilliseconds(ShowGraceMilliseconds);
                 pointerTimer.Start();
@@ -432,6 +441,8 @@ namespace MiniView.WebView2App
                 else if (id == HotkeyMute) ToggleMute();
                 else if (id == HotkeyImmersive) ToggleImmersiveMode();
                 else if (id == HotkeyMini) ToggleMiniMode();
+                else if (id == HotkeyPreviousVideo) RequestVideoSwitch(-1);
+                else if (id == HotkeyNextVideo) RequestVideoSwitch(1);
                 return;
             }
 
@@ -516,13 +527,15 @@ namespace MiniView.WebView2App
         private void ToggleSettings()
         {
             Diagnostics.Log("ToggleSettings open=" + (!settingsOpen) + " chromeHidden=" + settings.ChromeHidden);
-            if (settings.ChromeHidden) return;
+            if (settings.ChromeHidden && !backgroundMode) return;
             if (captureTarget != null) CancelShortcutCapture();
             settingsOpen = !settingsOpen;
-            webView.Visible = !settingsOpen;
+            webView.Visible = !settingsOpen && !backgroundMode;
             settingsPanel.Visible = settingsOpen;
             if (settingsOpen) settingsPanel.BringToFront();
+            else if (backgroundMode) backgroundPanel.BringToFront();
             else webView.BringToFront();
+            if (backgroundMode) ResizeBackgroundWindow();
             // Entering immersive mode from Settings changes the content-host height. Keep those DOM
             // changes deferred while WebView2 is hidden, then apply them only after its compositor is
             // visible again. Resizing/injecting into the hidden view can leave the player black.
@@ -534,6 +547,7 @@ namespace MiniView.WebView2App
 
         private void ToggleChrome()
         {
+            if (backgroundMode) return;
             if (!settings.ChromeHidden && !chromeHotkeyAvailable)
             {
                 ShowTransientNotice("边框恢复快捷键不可用，不能进入无边框模式。");
@@ -548,14 +562,14 @@ namespace MiniView.WebView2App
             Diagnostics.Log("ApplyChromeState hidden=" + hidden);
             if (hidden && captureTarget != null) CancelShortcutCapture();
             settings.ChromeHidden = hidden;
-            if (hidden)
+            if (hidden && !backgroundMode)
             {
                 settingsOpen = false;
                 settingsPanel.Visible = false;
                 webView.Visible = true;
             }
-            toolbar.Visible = !hidden;
-            Padding = hidden ? Padding.Empty : new Padding(1, 1, 1, 1);
+            toolbar.Visible = backgroundMode || !hidden;
+            Padding = hidden && !backgroundMode ? Padding.Empty : new Padding(1, 1, 1, 1);
             LayoutWindow();
             UpdateToolbarState();
         }
@@ -573,11 +587,13 @@ namespace MiniView.WebView2App
             toolTip.SetToolTip(hideButton, "立即隐藏" + FormatShortcut(windowHotkey));
             toolTip.SetToolTip(chromeButton, "隐藏边框" + FormatShortcut(chromeHotkey));
             toolTip.SetToolTip(miniButton, (miniMode ? "退出迷你小窗" : "迷你小窗") + FormatShortcut(miniHotkey));
+            chromeButton.Enabled = !backgroundMode && chromeButton.Enabled;
+            UpdateBackgroundControls();
         }
 
         private void UpdateZoom()
         {
-            if (webViewReady) webView.ZoomFactor = WindowRules.CalculateZoomFactor(ClientSize.Width);
+            if (webViewReady && !backgroundMode) webView.ZoomFactor = WindowRules.CalculateZoomFactor(ClientSize.Width);
         }
 
         private void LayoutWindow()
@@ -597,6 +613,7 @@ namespace MiniView.WebView2App
             if (overlay) toolbar.BringToFront();
             LayoutToolbarButtons(toolbarHeight);
             settingsPanel.Bounds = contentHost.ClientRectangle;
+            LayoutBackgroundPanel();
             pageNotice.SetBounds(Scaled(8), Scaled(8), Math.Max(1, contentHost.Width - Scaled(16)), Scaled(36));
             RefreshPageNotice();
             ApplyWindowShape();
@@ -619,12 +636,18 @@ namespace MiniView.WebView2App
 
             // 窄窗：后退/刷新收纳进「更多」溢出菜单；statusDot 让位，保证顶部留白可拖拽。
             bool fold = 9 * buttonWidth + 8 * gap + dotSpace > available - Scaled(8);
-            backButton.Visible = !fold;
-            reloadButton.Visible = !fold;
-            overflowButton.Visible = fold;
-            RoundedButton[] visible = fold
-                ? new RoundedButton[] { overflowButton, pinButton, muteButton, miniButton, settingsButton, chromeButton, hideButton, closeButton }
-                : new RoundedButton[] { backButton, reloadButton, pinButton, muteButton, miniButton, settingsButton, chromeButton, hideButton, closeButton };
+            backButton.Visible = backgroundMode ? settingsOpen : !fold;
+            reloadButton.Visible = !fold && !backgroundMode;
+            overflowButton.Visible = true;
+            chromeButton.Visible = !backgroundMode;
+            miniButton.Visible = !backgroundMode;
+            RoundedButton[] visible = backgroundMode
+                ? settingsOpen
+                    ? new RoundedButton[] { backButton, overflowButton, pinButton, muteButton, settingsButton, hideButton, closeButton }
+                    : new RoundedButton[] { overflowButton, pinButton, muteButton, settingsButton, hideButton, closeButton }
+                : fold
+                    ? new RoundedButton[] { overflowButton, pinButton, muteButton, miniButton, settingsButton, chromeButton, hideButton, closeButton }
+                    : new RoundedButton[] { backButton, reloadButton, overflowButton, pinButton, muteButton, miniButton, settingsButton, chromeButton, hideButton, closeButton };
             int count = visible.Length;
             statusDot.Visible = !fold && count * buttonWidth + (count - 1) * gap + dotSpace <= available;
 
@@ -677,6 +700,8 @@ namespace MiniView.WebView2App
             settings.ChromeShortcut = chromeHotkey == null ? "" : chromeHotkey.Serialize();
             settings.MuteShortcut = muteHotkey == null ? "" : muteHotkey.Serialize();
             settings.ImmersiveShortcut = immersiveHotkey == null ? "" : immersiveHotkey.Serialize();
+            settings.PreviousVideoShortcut = previousVideoHotkey == null ? "" : previousVideoHotkey.Serialize();
+            settings.NextVideoShortcut = nextVideoHotkey == null ? "" : nextVideoHotkey.Serialize();
             try { settingsStore.Save(settings); }
             catch (Exception exception)
             {

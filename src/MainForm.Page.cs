@@ -40,14 +40,14 @@ namespace MiniView.WebView2App
 
         private async Task DetectLiveStateAsync()
         {
-            if (!webViewReady || liveDetectionPending || webView.CoreWebView2 == null || !Visible || settingsOpen || isQuitting) return;
+            if (!webViewReady || liveDetectionPending || webView.CoreWebView2 == null || !Visible || (settingsOpen && !backgroundMode) || isQuitting) return;
             int navigation = navigationGeneration;
             long operation = lifecycle.Generation;
             liveDetectionPending = true;
             bool hasLivePlayer = false;
             try
             {
-                string result = await webView.ExecuteScriptAsync(PageScripts.LiveProbeScript);
+                string result = await webView.ExecuteScriptAsync(backgroundMode ? PageScripts.LiveStateScript : PageScripts.LiveProbeScript);
                 hasLivePlayer = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception exception)
@@ -59,7 +59,7 @@ namespace MiniView.WebView2App
                 liveDetectionPending = false;
             }
 
-            if (isQuitting || IsDisposed || navigation != navigationGeneration || !lifecycle.IsCurrent(operation) || !Visible || settingsOpen) return;
+            if (isQuitting || IsDisposed || navigation != navigationGeneration || !lifecycle.IsCurrent(operation) || !Visible || (settingsOpen && !backgroundMode)) return;
             bool isLiveUrl = WindowRules.IsLiveUrl(webView.Source == null ? string.Empty : webView.Source.AbsoluteUri);
             UpdateLiveState(hasLivePlayer || isLiveUrl);
         }
@@ -70,14 +70,18 @@ namespace MiniView.WebView2App
             Diagnostics.Log("UpdateLiveState " + currentIsLive + " -> " + nextIsLive);
             bool wasLive = currentIsLive;
             currentIsLive = nextIsLive;
-            if (currentIsLive) ApplyLiveLayout();
-            else if (wasLive || liveLandscapeApplied) RestorePortraitBounds();
+            if (!backgroundMode)
+            {
+                if (currentIsLive) ApplyLiveLayout();
+                else if (wasLive || liveLandscapeApplied) RestorePortraitBounds();
+            }
+            ApplyBackgroundState();
             UpdateSettingsUi();
         }
 
         private void ApplyLiveLayout()
         {
-            if (!settings.AutoLandscapeLive || !currentIsLive || liveLandscapeApplied) return;
+            if (backgroundMode || !settings.AutoLandscapeLive || !currentIsLive || liveLandscapeApplied) return;
             settings.NormalBounds = BoundsData.FromRectangle(Bounds);
             liveLandscapeApplied = true;
             MinimumSize = new Size(640, 360);
@@ -92,7 +96,7 @@ namespace MiniView.WebView2App
 
         private void RestorePortraitBounds()
         {
-            if (!liveLandscapeApplied) return;
+            if (backgroundMode || !liveLandscapeApplied) return;
             liveLandscapeApplied = false;
             MinimumSize = new Size(280, 460);
             Rectangle target = WindowRules.KeepOnScreen(settings.NormalBounds, 280, 460, WindowRules.DefaultSize);
@@ -112,6 +116,12 @@ namespace MiniView.WebView2App
         private void RememberCurrentBounds()
         {
             if (changingBounds || WindowState != FormWindowState.Normal) return;
+            if (backgroundMode)
+            {
+                if (!settingsOpen) settings.BackgroundBounds = BoundsData.FromRectangle(Bounds);
+                ScheduleSettingsSave();
+                return;
+            }
             if (miniMode) settings.MiniBounds = BoundsData.FromRectangle(Bounds);
             else if (liveLandscapeApplied) settings.LiveBounds = BoundsData.FromRectangle(Bounds);
             else settings.NormalBounds = BoundsData.FromRectangle(Bounds);
@@ -120,11 +130,13 @@ namespace MiniView.WebView2App
 
         private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            if (isQuitting || IsDisposed || !settings.ImmersiveMode) return;
+            if (isQuitting || IsDisposed) return;
             if (!IsTestMode && !WindowRules.IsDouyinUrl(e.Source)) return;
             string message;
             try { message = e.TryGetWebMessageAsString(); }
             catch { return; }
+            if (HandleBackgroundMessage(message)) return;
+            if (backgroundMode || !settings.ImmersiveMode) return;
             // 守卫会带上实测画面比例；精确匹配 revision 前缀，过期代次的消息一律忽略。
             string prefix = "boniu:immersive-fallback:" + pageStyleRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
             string detail = string.Empty;
@@ -153,7 +165,7 @@ namespace MiniView.WebView2App
             pageNotice.Text = hasTransient ? transientNotice
                 : navigationFailed ? "页面加载失败 · 点击重试"
                 : "已恢复标准布局 · 点击重试清爽样式";
-            pageNotice.Visible = hasTransient || (!settingsOpen && (navigationFailed || pageStyleFallback));
+            pageNotice.Visible = hasTransient || (!settingsOpen && (navigationFailed || (!backgroundMode && pageStyleFallback)));
             if (pageNotice.Visible) pageNotice.BringToFront();
             toolTip.SetToolTip(pageNotice, hasTransient ? transientNotice
                 : navigationFailed ? "请检查网络连接，然后点击重试。"
@@ -184,7 +196,7 @@ namespace MiniView.WebView2App
         private async Task ApplyPageElementVisibilityAsync()
         {
             Diagnostics.Mark("ApplyPageElementVisibility enter");
-            if (!webViewReady || webView.CoreWebView2 == null || isQuitting || pageStyleFallback) return;
+            if (!webViewReady || webView.CoreWebView2 == null || isQuitting || pageStyleFallback || backgroundMode) return;
             if (settingsOpen || !webView.Visible)
             {
                 Diagnostics.Mark("ApplyPageElementVisibility deferred while WebView hidden");
@@ -199,6 +211,7 @@ namespace MiniView.WebView2App
             get
             {
                 if (settings == null) return false;
+                if (backgroundMode) return false;
                 // The Settings button must remain available while configuring immersive mode. The
                 // toolbar collapses after returning to the page, when the WebView is visible again.
                 return settings.ChromeHidden || (settings.ImmersiveMode && !settingsOpen && !toolbarRevealed);
@@ -212,7 +225,7 @@ namespace MiniView.WebView2App
         {
             get
             {
-                if (settings == null) return false;
+                if (settings == null || backgroundMode) return false;
                 return WindowRules.ShouldOverlayToolbar(
                     settings.ImmersiveMode, settings.ChromeHidden, settingsOpen, toolbarRevealed);
             }
@@ -220,7 +233,7 @@ namespace MiniView.WebView2App
 
         private void UpdateImmersiveToolbar()
         {
-            if (!settings.ImmersiveMode || settings.ChromeHidden || !Visible) return;
+            if (backgroundMode || !settings.ImmersiveMode || settings.ChromeHidden || !Visible) return;
             Point cursor = PointToClient(Cursor.Position);
             bool next = WindowRules.ShouldRevealToolbar(
                 cursor.X, cursor.Y, ClientSize.Width, toolbarRevealed,

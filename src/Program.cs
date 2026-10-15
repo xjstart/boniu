@@ -20,7 +20,8 @@ namespace MiniView.WebView2App
             if (HasArgument(args, "--update-check-test")) return RunUpdateCheckTest();
 
             bool testMode = HasArgument(args, "--smoke-test") || HasArgument(args, "--live-smoke-test")
-                || HasArgument(args, "--settings-smoke-test") || HasArgument(args, "--dom-probe") || HasArgument(args, "--regression-test");
+                || HasArgument(args, "--settings-smoke-test") || HasArgument(args, "--dom-probe")
+                || HasArgument(args, "--regression-test") || HasArgument(args, "--background-regression-test");
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -84,11 +85,13 @@ namespace MiniView.WebView2App
             bool liveSmokeTest = HasArgument(args, "--live-smoke-test");
             bool settingsSmokeTest = HasArgument(args, "--settings-smoke-test");
             bool domProbe = HasArgument(args, "--dom-probe");
+            bool backgroundRegressionOnly = HasArgument(args, "--background-regression-test");
             string healthToken = GetArgumentValue(args, "--update-health-token");
 
-            if (smokeTest || liveSmokeTest || settingsSmokeTest || domProbe || HasArgument(args, "--regression-test"))
+            if (smokeTest || liveSmokeTest || settingsSmokeTest || domProbe || HasArgument(args, "--regression-test") || backgroundRegressionOnly)
             {
-                using (MainForm testForm = new MainForm(smokeTest, liveSmokeTest, settingsSmokeTest, domProbe, null, HasArgument(args, "--regression-test")))
+                using (MainForm testForm = new MainForm(smokeTest, liveSmokeTest, settingsSmokeTest, domProbe, null,
+                    HasArgument(args, "--regression-test") || backgroundRegressionOnly, backgroundRegressionOnly))
                     Application.Run(testForm);
                 return Environment.ExitCode;
             }
@@ -243,6 +246,20 @@ namespace MiniView.WebView2App
             failures += Check(upgradedSettings.AutoHideEnabled, "旧设置升级后保持鼠标移出隐藏");
             failures += Check(upgradedSettings.AutoHideDelayMilliseconds == 100, "旧设置升级后使用 0.1 秒延迟");
             failures += Check(!upgradedSettings.EdgeAutoHideEnabled, "旧设置升级后默认不开启贴边自动隐藏");
+            HotkeyDefinition previousDefault;
+            HotkeyDefinition nextDefault;
+            failures += Check(HotkeyDefinition.TryParse(upgradedSettings.PreviousVideoShortcut, out previousDefault)
+                && previousDefault.Serialize() == "Control+Alt+Up", "旧设置升级后提供后台上一条快捷键");
+            failures += Check(HotkeyDefinition.TryParse(upgradedSettings.NextVideoShortcut, out nextDefault)
+                && nextDefault.Serialize() == "Control+Alt+Down" && !nextDefault.ConflictsWith(previousDefault),
+                "后台下一条默认快捷键不与上一条冲突");
+            AppSettings backgroundRoundtrip = serializer.Deserialize<AppSettings>(serializer.Serialize(new AppSettings {
+                PreviousVideoShortcut = "", NextVideoShortcut = "Control+Shift+Down",
+                BackgroundBounds = new BoundsData { X = 10, Y = 20, Width = 360, Height = 160 }
+            }));
+            failures += Check(backgroundRoundtrip.PreviousVideoShortcut == ""
+                && backgroundRoundtrip.NextVideoShortcut == "Control+Shift+Down"
+                && backgroundRoundtrip.BackgroundBounds.Height == 160, "后台小窗位置与自定义及禁用快捷键序列化保存");
 
             Rectangle landscape = WindowRules.CalculateLandscapeBounds(new Rectangle(100, 100, 420, 760), new Rectangle(0, 0, 1920, 1040));
             failures += Check(landscape.Width == 760 && landscape.Height == 428, "直播横屏尺寸");

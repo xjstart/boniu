@@ -21,7 +21,7 @@ namespace MiniView.WebView2App
             Diagnostics.Mark("pointer");
             UpdateImmersiveToolbar();
             MonitorEdgeDock();
-            if (IsTestMode || domProbe
+            if (IsTestMode || domProbe || backgroundMode
                 || !WindowRules.EffectiveMouseLeaveAutoHide(settings.AutoHideEnabled, settings.EdgeAutoHideEnabled)
                 || !CanRestoreWindow
                 || suppressInactiveHide || captureTarget != null || !Visible
@@ -78,6 +78,7 @@ namespace MiniView.WebView2App
                 settingsOpen = false;
                 settingsPanel.Visible = false;
                 webView.Visible = false;
+                if (backgroundMode) ResizeBackgroundWindow();
             }
             ArmSuspendTimer(WebViewSuspendDelayMilliseconds);
             Diagnostics.Log("hide native-ms=" + hiddenMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
@@ -87,6 +88,7 @@ namespace MiniView.WebView2App
         private void ApplyMediaState()
         {
             ObserveTask(ApplyMediaStateAsync(), "ApplyMediaState");
+            ApplyBackgroundState();
         }
 
         private async Task ApplyMediaStateAsync()
@@ -152,7 +154,7 @@ namespace MiniView.WebView2App
             showGraceUntil = DateTime.UtcNow.AddMilliseconds(ShowGraceMilliseconds);
             outsideSince = null;
             Show();
-            webView.Visible = !settingsOpen;
+            webView.Visible = !settingsOpen && !backgroundMode;
             webView.SynchronizeVisibility();
             Activate();
             pointerTimer.Interval = 10;
@@ -234,6 +236,7 @@ namespace MiniView.WebView2App
 
         private void ToggleMiniMode()
         {
+            if (backgroundMode) ToggleBackgroundMode();
             // 贴边收起时按快捷键：用户是想看窗口，先恢复并解除贴边，再切换形态。
             if (edgeDockSide != EdgeDockSide.None) ShowWindow();
             if (miniMode) ExitMiniMode();
@@ -313,7 +316,7 @@ namespace MiniView.WebView2App
 
         private void HideWhenApplicationBecomesInactive()
         {
-            if (!settings.HideWhenInactive || suppressInactiveHide || !CanRestoreWindow
+            if (backgroundMode || !settings.HideWhenInactive || suppressInactiveHide || !CanRestoreWindow
                 || captureTarget != null || !Visible || isQuitting) return;
             HideWindow();
         }

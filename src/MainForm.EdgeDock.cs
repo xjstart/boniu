@@ -63,7 +63,7 @@ namespace MiniView.WebView2App
         private void EvaluateEdgeDock()
         {
             if (isQuitting || IsDisposed || !IsHandleCreated) return;
-            if (!settings.EdgeAutoHideEnabled || miniMode)
+            if (!settings.EdgeAutoHideEnabled || miniMode || backgroundMode)
             {
                 UndockEdge();
                 return;
@@ -140,7 +140,7 @@ namespace MiniView.WebView2App
         /// <summary>贴边状态下的鼠标轮询：收起时等光标贴住那一段边缘唤出，唤出后鼠标离开再收起。</summary>
         private void MonitorEdgeDock()
         {
-            if (IsTestMode || domProbe || isQuitting || IsDisposed || !IsHandleCreated) return;
+            if (IsTestMode || domProbe || backgroundMode || isQuitting || IsDisposed || !IsHandleCreated) return;
             if (!settings.EdgeAutoHideEnabled || edgeDockSide == EdgeDockSide.None) return;
             Rectangle zone = EdgeDockRevealZone;
             if (zone.IsEmpty) return;

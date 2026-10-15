@@ -18,7 +18,7 @@ $name = ([char]0x6CE2).ToString() + ([char]0x599E).ToString() + ([char]0x6478).T
 $exe = Join-Path $root ("build\$Platform\$name.Tests$suffix.exe")
 if (-not (Test-Path -LiteralPath $exe)) { throw "Missing test executable: $exe" }
 $cases = @('--self-test', '--smoke-test', '--live-smoke-test', '--settings-smoke-test')
-if (-not $SkipRegression) { $cases += '--regression-test' }
+if (-not $SkipRegression) { $cases += @('--background-regression-test', '--regression-test') }
 $results = @()
 foreach ($case in $cases) {
     $start = [Diagnostics.ProcessStartInfo]::new($exe, $case)
@@ -50,8 +50,12 @@ foreach ($case in $cases) {
     if ($stderr) { Write-Host $stderr.Trim() }
     $report = Join-Path $testData 'regression.json'
     if (Test-Path -LiteralPath $report) { Copy-Item -LiteralPath $report -Destination (Join-Path $root "regression-$Platform.json") -Force }
+    $backgroundReport = Join-Path $testData 'background-regression.json'
+    if (Test-Path -LiteralPath $backgroundReport) { Copy-Item -LiteralPath $backgroundReport -Destination (Join-Path $root "background-regression-$Platform.json") -Force }
     $image = Join-Path $testData 'settings-fixture.png'
     if (Test-Path -LiteralPath $image) { Copy-Item -LiteralPath $image -Destination (Join-Path $root "settings-$Platform.png") -Force }
+    $backgroundImage = Join-Path $testData 'background-fixture.png'
+    if (Test-Path -LiteralPath $backgroundImage) { Copy-Item -LiteralPath $backgroundImage -Destination (Join-Path $root "background-$Platform.png") -Force }
     $process.Dispose()
 }
 $reportPath = Join-Path $root "tests-$Platform.json"

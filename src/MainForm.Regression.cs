@@ -24,6 +24,14 @@ namespace MiniView.WebView2App
                 await WaitForPageAsync("window.fixtureReady === true");
                 AssertRegression(!settings.AutoLandscapeLive && !settings.ShowTrayIcon, "isolated default settings");
                 AssertRegression(await PageIsTrueAsync("!document.getElementById('playing').paused && document.getElementById('manual').paused"), "synthetic video playing; manually paused video preserved");
+                await RunBackgroundRegressionAsync();
+                if (backgroundRegressionOnly)
+                {
+                    AssertRegression(!File.Exists(Path.Combine(appFolder, "settings.json")), "background test does not persist real settings");
+                    Console.WriteLine("Background regression: " + regressionResults.Count + " checks passed");
+                    Environment.ExitCode = 0;
+                    return;
+                }
                 await MeasurePerformanceAsync("synthetic-playing");
 
                 double maxHideMs = 0;
@@ -232,10 +240,12 @@ namespace MiniView.WebView2App
                 try
                 {
                     Directory.CreateDirectory(appFolder);
-                    File.WriteAllText(Path.Combine(appFolder, "regression.json"), new JavaScriptSerializer().Serialize(new
+                    File.WriteAllText(Path.Combine(appFolder, backgroundRegressionOnly ? "background-regression.json" : "regression.json"), new JavaScriptSerializer().Serialize(new
                     {
                         scope = "Isolated synthetic WebView2 fixture; not real Douyin/network/decoded-stream benchmark",
                         architecture = IntPtr.Size == 4 ? "x86" : "x64",
+                        pictureValidation = backgroundRegressionOnly ? "Native window visibility + WebView2 decoded preview; does not prove desktop compositing"
+                            : "Includes strict desktop-pixel checks after restore",
                         checks = regressionResults,
                         performance = performanceSamples
                     }));
@@ -315,6 +325,18 @@ namespace MiniView.WebView2App
                 await Task.Delay(100);
             }
             Console.Error.WriteLine("WebView center pixel: " + SampleWebViewCenterColor());
+            Console.Error.WriteLine("Fixture window: bounds=" + Bounds + " webview=" + webView.RectangleToScreen(webView.ClientRectangle)
+                + " visible=" + Visible + "/" + webView.Visible + " topmost=" + TopMost);
+            NativeMethods.NativeRectangle native;
+            NativeMethods.GetWindowRect(Handle, out native);
+            Console.Error.WriteLine("Native fixture: visible=" + NativeMethods.IsWindowVisible(Handle)
+                + " bounds=" + native.Left + "," + native.Top + "," + native.Right + "," + native.Bottom);
+            Console.Error.WriteLine("Fixture page: " + await webView.ExecuteScriptAsync(@"(()=>{
+                const v=document.getElementById('playing'),r=v.getBoundingClientRect();
+                return {viewport:[innerWidth,innerHeight],video:[r.x,r.y,r.width,r.height],
+                    paused:v.paused,time:v.currentTime,ready:v.readyState,visibility:document.visibilityState};})()"));
+            Directory.CreateDirectory(appFolder);
+            DumpWindowShot(appFolder, "regression-failure.png");
             return false;
         }
 
@@ -397,7 +419,9 @@ namespace MiniView.WebView2App
             [data-e2e='feed-active-video']{width:100%;height:100%}video#playing{width:100%;height:100%}
             #douyin-header{position:absolute;top:0}#manual{display:none}
             </style></head><body><header id=""douyin-header"">fixture header</header>
-            <div data-e2e=""feed-active-video""><video id=""playing"" muted playsinline></video></div>
+            <div data-e2e=""feed-active-video"" data-video-id=""1""><video id=""playing"" muted playsinline></video></div>
+            <button aria-label=""上一条"" onclick=""window.fixtureSwitch(-1)"">previous</button>
+            <button aria-label=""下一条"" onclick=""window.fixtureSwitch(1)"">next</button>
             <div id=""commentPanel"" data-e2e=""comment-list"" style=""display:none;position:absolute;right:0;top:0;width:70%;height:100%;background:#222;color:#fff"">fixture comments</div>
             <video id=""manual"" muted></video><script>
             const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
@@ -405,12 +429,22 @@ namespace MiniView.WebView2App
             setInterval(()=>{ctx.fillStyle=frame++%2?'#167d4c':'#2266aa';ctx.fillRect(0,0,320,180);},100);
             const stream=canvas.captureStream(10);
             const video=document.getElementById('playing');video.srcObject=stream;
+            video.loop=true;
             document.getElementById('manual').srcObject=stream;
             video.play().then(()=>window.fixtureReady=true);
             window.nextFixtureVideo=async()=>{const old=document.getElementById('playing');old.pause();
                 const next=old.cloneNode();next.srcObject=stream;old.replaceWith(next);await next.play();};
             window.openFixtureComments=()=>{document.getElementById('commentPanel').style.display='block';};
             window.closeFixtureComments=()=>{document.getElementById('commentPanel').style.display='none';};
+            window.fixtureIndex=1;window.fixtureSwitches=0;window.fixtureReuse=false;
+            window.fixtureSwitch=async direction=>{
+                window.fixtureIndex+=direction;window.fixtureSwitches++;
+                const old=document.getElementById('playing');old.pause();
+                const next=window.fixtureReuse?old:old.cloneNode();next.loop=true;next.srcObject=stream;
+                if(next!==old)old.replaceWith(next);
+                next.parentElement.setAttribute('data-video-id',String(window.fixtureIndex));
+                await next.play();
+            };
             </script></body></html>";
     }
 }
